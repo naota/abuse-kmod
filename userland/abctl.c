@@ -33,6 +33,7 @@ int main(int argc, char *argv[])
     return -1;
   }
 
+  // check if disk is already there
   struct abuse_info info;
   if (ioctl(fd, ABUSE_GET_STATUS, &info) == -1) {
     perror("GET_STATUS failed");
@@ -40,6 +41,8 @@ int main(int argc, char *argv[])
   }
   if (info.ab_size > 0)
     ioctl(fd, ABUSE_RESET);
+
+  // Generate disk
   info.ab_size = 16 * 4096;
   info.ab_blocksize = 4096;
   info.ab_max_queue = max_queue;
@@ -67,6 +70,8 @@ int main(int argc, char *argv[])
     teardown();
     return -1;
   }
+
+  // main loop waiting for IO
   while (ppoll(fds, FDCNT, NULL, NULL) > 0) {
     if (fds[0].revents) {
       int i;
@@ -115,7 +120,7 @@ int main(int argc, char *argv[])
 	for (i=0; i<xfr.ab_vec_count; ++i) {
 	  printf("\toffset: %d, len: %d\n\n", vecs[i].ab_offset, vecs[i].ab_len);
 	  vecs[i].ab_address = (__u64)malloc(vecs[i].ab_len);
-	  // FIXME: return zero data
+	  // FIXME: currently it behave like /dev/zero
 	  memset((char*)vecs[i].ab_address, 0, vecs[i].ab_len);
 	}
 	ioctl(fd, ABUSE_PUT_BIO, &xfr);
@@ -127,7 +132,7 @@ int main(int argc, char *argv[])
       printf("\n");
     }
 
-    // signal
+    // got signal! closing
     if (fds[1].revents)
       break;
   }
