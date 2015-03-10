@@ -514,9 +514,9 @@ static int ab_open(struct block_device *bdev, fmode_t mode)
 	return 0;
 }
 
-static int ab_release(struct gendisk *disk, fmode_t mode)
+static void ab_release(struct gendisk *disk, fmode_t mode)
 {
-	return 0;
+	return;
 }
 
 static struct block_device_operations ab_fops = {
