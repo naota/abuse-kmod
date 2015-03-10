@@ -75,6 +75,9 @@ enum {
 	ABUSE_RESULT_DEVICE_FAILURE	= 2
 };
 
+#define ABUSE_MAJOR    60
+#define ABUSECTL_MAJOR   61
+
 #ifdef __KERNEL__
 #include <linux/bio.h>
 #include <linux/blkdev.h>
