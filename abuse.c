@@ -30,11 +30,10 @@
 #include <linux/major.h>
 #include <linux/blkdev.h>
 #include <linux/init.h>
-#include <linux/smp_lock.h>
 #include <linux/buffer_head.h>		/* for invalidate_bdev() */
 #include <linux/cdev.h>
 #include <linux/poll.h>
-#include <linux/abuse.h>
+#include "abuse.h"
 
 #include <asm/uaccess.h>
 
