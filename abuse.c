@@ -218,7 +218,7 @@ abuse_set_status_int(struct abuse_device *ab, struct block_device *bdev,
 			err = PTR_ERR(bdev);
 			return err;
 		}
-		err = blkdev_get(bdev, FMODE_READ);
+		err = blkdev_get(bdev, FMODE_READ, NULL);
 		if (err) {
 			bdput(bdev);
 			return err;
