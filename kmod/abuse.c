@@ -189,6 +189,9 @@ abuse_set_status_int(struct abuse_device *ab, struct block_device *bdev,
 	if (unlikely((loff_t)size != size))
 		return -EFBIG;
 
+	if (unlikely(info->ab_blocksize == 0))
+		return -EINVAL;
+
 	blocks = info->ab_size / info->ab_blocksize;
 	if (unlikely(info->ab_blocksize * blocks != info->ab_size))
 		return -EINVAL;
