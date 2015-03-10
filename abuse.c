@@ -438,8 +438,7 @@ abuse_put_bio(struct abuse_device *ab, struct abuse_xfr_hdr __user *arg)
 	return 0;
 }
 
-static int abctl_ioctl(struct inode *inode, struct file *filp, unsigned int cmd,
-	unsigned long arg)
+static long abctl_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
 	struct abuse_device *ab = filp->private_data;
 	int err;
@@ -530,7 +529,7 @@ static struct file_operations abctl_fops = {
 	.owner =	THIS_MODULE,
 	.open =		abctl_open,
 	.release =	abctl_release,
-	.ioctl =	abctl_ioctl,
+	.unlocked_ioctl =	abctl_ioctl,
 	.poll =		abctl_poll,
 };
 
