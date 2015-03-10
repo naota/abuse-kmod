@@ -1,0 +1,12 @@
+*.ko
+*.mod.c
+*.mod.o
+*.o
+*~
+.*.cmd
+.tmp_versions/
+GPATH
+GRTAGS
+GTAGS
+Module.symvers
+modules.order
