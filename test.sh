@@ -14,4 +14,9 @@ die() {
 
 set -x
 
-dd if=/dev/zero of=${DEV} bs=1M count=${SIZE} || die
+./userland/abctl ${CTL} &
+pid=$!
+sleep 1
+dd if=/dev/zero of=${DEV} bs=4096 count=1 oflag=sync || die
+dd if=${DEV} of=/dev/stdout bs=4096 count=1 | hexdump -C || die
+kill $pid
