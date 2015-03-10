@@ -309,8 +309,8 @@ abuse_get_bio(struct abuse_device *ab, struct abuse_xfr_hdr __user *arg)
 	xfr.ab_id = (__u64)bio;
 	if (bio) {
 		int i;
-		xfr.ab_sector = bio->bi_sector;
-		xfr.ab_command = (bio->bi_rw & BIO_RW);
+		xfr.ab_sector = bio->bi_iter.bi_sector;
+		xfr.ab_command = (bio->bi_rw & RW_MASK);
 		xfr.ab_vec_count = bio->bi_vcnt;
 		for (i = 0; i < bio->bi_vcnt; i++) {
 			ab->ab_xfer[i].ab_len = bio->bi_io_vec[i].bv_len;
@@ -340,7 +340,8 @@ abuse_put_bio(struct abuse_device *ab, struct abuse_xfr_hdr __user *arg)
 {
 	struct abuse_xfr_hdr xfr;
 	struct bio *bio;
-	struct bio_vec *bvec;
+	struct bio_vec bvec;
+	struct bvec_iter iter;
 	int i, read;
 
 	if (!arg)
@@ -376,13 +377,13 @@ abuse_put_bio(struct abuse_device *ab, struct abuse_xfr_hdr __user *arg)
 	 * re-use the same bio and some user-tarded program tries to complete
 	 * an historical event.  Better prophylactics are possible, but crazy.
 	 */
-	if (bio->bi_sector != xfr.ab_sector ||
+	if (bio->bi_iter.bi_sector != xfr.ab_sector ||
 	    bio->bi_vcnt != xfr.ab_vec_count ||
-	    (bio->bi_rw & BIO_RW) != xfr.ab_command) {
+	    (bio->bi_rw & RW_MASK) != xfr.ab_command) {
 	    	abuse_add_bio_unlocked(ab, bio);
 		return -EINVAL;
 	}
-	read = !(bio->bi_rw & BIO_RW);
+	read = !(bio->bi_rw & RW_MASK);
 	
 	/*
 	 * Now handle individual failures that don't affect other I/Os.
@@ -408,25 +409,27 @@ abuse_put_bio(struct abuse_device *ab, struct abuse_xfr_hdr __user *arg)
 	/*
 	 * You made it this far?  It's time for the third movement.
 	 */
-	bio_for_each_segment(bvec, bio, i)
+	i = 0;
+	bio_for_each_segment(bvec, bio, iter)
 	{
 		int ret;
-		void *kaddr = kmap(bvec->bv_page);
+		void *kaddr = kmap(bvec.bv_page);
 
 		if (read)
-			ret = copy_from_user(kaddr + bvec->bv_offset, 
+			ret = copy_from_user(kaddr + bvec.bv_offset, 
 				(void *)ab->ab_xfer[i].ab_address,
-				bvec->bv_len);
+				bvec.bv_len);
 		else
 			ret = copy_to_user((void *)ab->ab_xfer[i].ab_address,
-				kaddr + bvec->bv_offset, bvec->bv_len);
+				kaddr + bvec.bv_offset, bvec.bv_len);
 
-		kunmap(bvec->bv_page);
+		kunmap(bvec.bv_page);
 		if (ret != 0) { 
 			/* Wise, up sucker! (PWEI RULEZ) */
 			abuse_add_bio_unlocked(ab, bio);
 			return -EFAULT;
 		}
+		++i;
 	}
 
 	/* Well, you did it.  Congraulations, you get a pony. */
