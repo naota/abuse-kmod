@@ -103,7 +103,7 @@ static inline struct bio *abuse_find_bio(struct abuse_device *ab,
 	return bio;
 }
 
-static int abuse_make_request(struct request_queue *q, struct bio *old_bio)
+static void abuse_make_request(struct request_queue *q, struct bio *old_bio)
 {
 	struct abuse_device *ab = q->queuedata;
 	int rw = bio_rw(old_bio);
@@ -121,13 +121,13 @@ static int abuse_make_request(struct request_queue *q, struct bio *old_bio)
 	abuse_add_bio(ab, old_bio);
 	wake_up(&ab->ab_event);
 	spin_unlock_irq(&ab->ab_lock);
-	return 0;
+	return;
 
 out:
 	ab->ab_errors++;
 	spin_unlock_irq(&ab->ab_lock);
 	bio_io_error(old_bio);
-	return 0;
+	return;
 }
 
 static void abuse_flush_bio(struct abuse_device *ab)
