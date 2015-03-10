@@ -148,14 +148,6 @@ static void abuse_flush_bio(struct abuse_device *ab)
 	}
 }
 
-/*
- * kick off io on the underlying address space
- */
-static void abuse_unplug(struct request_queue *q)
-{
-	queue_flag_clear_unlocked(QUEUE_FLAG_PLUGGED, q);
-}
-
 static inline int is_abuse_device(struct file *file)
 {
 	struct inode *i = file->f_mapping->host;
@@ -169,7 +161,6 @@ static int abuse_reset(struct abuse_device *ab)
 		return -EINVAL;
 
 	abuse_flush_bio(ab);
-	ab->ab_queue->unplug_fn = NULL;
 	ab->ab_flags = 0;
 	ab->ab_errors = 0;
 	ab->ab_blocksize = 0;
@@ -238,7 +229,6 @@ abuse_set_status_int(struct abuse_device *ab, struct block_device *bdev,
 	ab->ab_device = bdev;
 	blk_queue_make_request(ab->ab_queue, abuse_make_request);
 	ab->ab_queue->queuedata = ab;
-	ab->ab_queue->unplug_fn = abuse_unplug;
 	queue_flag_set_unlocked(QUEUE_FLAG_NONROT, ab->ab_queue);
 
 	ab->ab_size = info->ab_size;
