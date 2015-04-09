@@ -49,7 +49,7 @@ struct abuse_device *abuse_get_dev(int dev)
 	struct abuse_device *ab = NULL;
 
 	mutex_lock(&abuse_devices_mutex);
-	list_for_each_entry(ab, &abuse_devices, ab_list) 
+	list_for_each_entry(ab, &abuse_devices, ab_list)
 		if (ab->ab_number == dev)
 			break;
 	mutex_unlock(&abuse_devices_mutex);
@@ -89,7 +89,7 @@ static inline struct bio *abuse_find_bio(struct abuse_device *ab,
 	if (bio) {
 		if (bio == ab->ab_biotail) {
 			ab->ab_biotail = bio == ab->ab_bio ? NULL :
-			   (struct bio *) 
+			   (struct bio *)
 			   ((caddr_t)pprev - offsetof(struct bio, bi_next));
 		}
 		*pprev = bio->bi_next;
@@ -326,7 +326,7 @@ abuse_get_bio(struct abuse_device *ab, struct abuse_xfr_hdr __user *arg)
 		copy_to_user((void *)xfr.ab_transfer_address, ab->ab_xfer,
 			     xfr.ab_vec_count * sizeof(ab->ab_xfer[0])))
 		return -EFAULT;
-	
+
 	return bio ? 0 : -ENOMSG;
 }
 
@@ -364,7 +364,7 @@ abuse_put_bio(struct abuse_device *ab, struct abuse_xfr_hdr __user *arg)
 	spin_unlock_irq(&ab->ab_lock);
 	if (!bio)
 		return -ENOMSG;
-	
+
 	/*
 	 * This isn't just arbitrary anal-retentiveness.  Userspace will
 	 * obviously crash and burn, and so we check all fields as stringently
@@ -379,7 +379,7 @@ abuse_put_bio(struct abuse_device *ab, struct abuse_xfr_hdr __user *arg)
 		return -EINVAL;
 	}
 	read = !(bio->bi_rw & RW_MASK);
-	
+
 	/*
 	 * Now handle individual failures that don't affect other I/Os.
 	 */
@@ -400,7 +400,7 @@ abuse_put_bio(struct abuse_device *ab, struct abuse_xfr_hdr __user *arg)
 	    	abuse_add_bio_unlocked(ab, bio);
 		return -EFAULT;
 	}
-	
+
 	/*
 	 * You made it this far?  It's time for the third movement.
 	 */
@@ -411,7 +411,7 @@ abuse_put_bio(struct abuse_device *ab, struct abuse_xfr_hdr __user *arg)
 		void *kaddr = kmap(bvec.bv_page);
 
 		if (read)
-			ret = copy_from_user(kaddr + bvec.bv_offset, 
+			ret = copy_from_user(kaddr + bvec.bv_offset,
 				(void *)ab->ab_xfer[i].ab_address,
 				bvec.bv_len);
 		else
@@ -419,7 +419,7 @@ abuse_put_bio(struct abuse_device *ab, struct abuse_xfr_hdr __user *arg)
 				kaddr + bvec.bv_offset, bvec.bv_len);
 
 		kunmap(bvec.bv_page);
-		if (ret != 0) { 
+		if (ret != 0) {
 			/* Wise, up sucker! (PWEI RULEZ) */
 			abuse_add_bio_unlocked(ab, bio);
 			return -EFAULT;
@@ -486,7 +486,7 @@ static unsigned int abctl_poll(struct file *filp, poll_table *wait)
 static int abctl_open(struct inode *inode, struct file *filp)
 {
 	struct abuse_device *ab;
-	
+
 	ab = abuse_get_dev(iminor(inode));
 	if (!ab)
 		return -ENODEV;
@@ -557,7 +557,7 @@ static struct abuse_device *abuse_alloc(int i)
 	disk = ab->ab_disk = alloc_disk(num_minors);
 	if (!disk)
 		goto out_free_queue;
-	
+
 	disk->major		= ABUSE_MAJOR;
 	disk->first_minor	= i << dev_shift;
 	disk->fops		= &ab_fops;
@@ -574,14 +574,14 @@ static struct abuse_device *abuse_alloc(int i)
 
 	if (cdev_add(ab->ab_cdev, MKDEV(ABUSECTL_MAJOR, i), 1) != 0)
 		goto out_free_cdev;
-	
+
 	device = device_create(abuse_class, NULL, MKDEV(ABUSECTL_MAJOR, i), ab,
 				"abctl%d", i);
 	if (IS_ERR(device)) {
 		printk(KERN_ERR "abuse_alloc: device_create failed\n");
 		goto out_free_cdev;
 	}
-	
+
 	mutex_init(&ab->ab_ctl_mutex);
 	ab->ab_number		= i;
 	init_waitqueue_head(&ab->ab_event);
@@ -615,7 +615,7 @@ static struct abuse_device *abuse_init_one(int i)
 {
 	struct abuse_device *ab;
 
-	list_for_each_entry(ab, &abuse_devices, ab_list) 
+	list_for_each_entry(ab, &abuse_devices, ab_list)
 		if (ab->ab_number == i)
 			return ab;
 
@@ -686,7 +686,7 @@ static int __init abuse_init(void)
 		printk("abuse: register_blkdev failed!\n");
 		return err;
 	}
-	
+
 	err = register_chrdev_region(MKDEV(ABUSECTL_MAJOR, 0), range, "abuse");
 	if (err) {
 		printk("abuse: register_chrdev_region failed!\n");
