@@ -2,6 +2,8 @@ CC := gcc
 CFLAGS := -O2 -Wall -Werror -I../kmod
 LDFLAGS := -lcrypto
 
-all: abctl
+TARGETS=abctl abmem
+
+all: $(TARGETS)
 clean:
-	rm -f abctl
+	rm -f $(TARGETS)
