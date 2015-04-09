@@ -115,8 +115,6 @@ static void abuse_make_request(struct request_queue *q, struct bio *old_bio)
 	spin_lock_irq(&ab->ab_lock);
 	if (unlikely(rw == WRITE && (ab->ab_flags & ABUSE_FLAGS_READ_ONLY)))
 		goto out;
-	if (unlikely(ab->ab_queue_size == ab->ab_max_queue))
-		goto out;
 	abuse_add_bio(ab, old_bio);
 	wake_up(&ab->ab_event);
 	spin_unlock_irq(&ab->ab_lock);
@@ -194,9 +192,6 @@ abuse_set_status_int(struct abuse_device *ab, struct block_device *bdev,
 
 	blocks = info->ab_size / info->ab_blocksize;
 	if (unlikely(info->ab_blocksize * blocks != info->ab_size))
-		return -EINVAL;
-
-	if (unlikely(info->ab_max_queue) > 512)
 		return -EINVAL;
 
 	if (unlikely(bdev)) {
