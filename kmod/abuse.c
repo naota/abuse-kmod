@@ -61,7 +61,6 @@ struct abuse_device *abuse_get_dev(int dev)
  */
 static void abuse_add_bio(struct abuse_device *ab, struct bio *bio)
 {
-	printk("abuse_add_bio %p\n", bio);
 	if (ab->ab_biotail) {
 		ab->ab_biotail->bi_next = bio;
 		ab->ab_biotail = bio;
@@ -98,7 +97,6 @@ static inline struct bio *abuse_find_bio(struct abuse_device *ab,
 		ab->ab_queue_size--;
 	}
 
-	printk("abuse_find_bio %p %p\n", bio, match);
 	return bio;
 }
 
