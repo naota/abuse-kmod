@@ -38,8 +38,8 @@ struct abuse_info {
 #define ABUSE_SET_STATUS	0x4121
 #define ABUSE_SET_POLL		0x4122
 #define ABUSE_RESET		0x4123
-#define ABUSE_GET_BIO		0x4124
-#define ABUSE_PUT_BIO		0x4125
+#define ABUSE_GET_REQ		0x4124
+#define ABUSE_PUT_REQ		0x4125
 
 struct abuse_vec {
 	__u64			ab_address;
@@ -53,7 +53,6 @@ struct abuse_xfr_hdr {
 	__u32			ab_command;
 	__u32			ab_result;
 	__u32			ab_vec_count;
-	__u32			ab_vec_offset;
 	__u64			ab_transfer_address;
 };
 
@@ -81,6 +80,7 @@ enum {
 #ifdef __KERNEL__
 #include <linux/bio.h>
 #include <linux/blkdev.h>
+#include <linux/blk-mq.h>
 #include <linux/spinlock.h>
 #include <linux/mutex.h>
 
@@ -99,18 +99,24 @@ struct abuse_device {
 	gfp_t		old_gfp_mask;
 
 	spinlock_t		ab_lock;
-	struct bio 		*ab_bio;
-	struct bio		*ab_biotail;
+	struct list_head	ab_reqlist;
 	struct mutex		ab_ctl_mutex;
 	wait_queue_head_t	ab_event;
 
 	struct request_queue	*ab_queue;
+	struct blk_mq_tag_set	tag_set;
 	struct gendisk		*ab_disk;
 	struct cdev		*ab_cdev;
 	struct list_head	ab_list;
 
 	/* user xfer area */
 	struct abuse_vec	ab_xfer[BIO_MAX_PAGES];
+};
+
+struct ab_req {
+	struct request		*rq;
+	int			vec_cnt;
+	struct list_head	list;
 };
 
 #endif /* __KERNEL__ */
