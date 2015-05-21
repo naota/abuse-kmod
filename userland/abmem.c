@@ -88,11 +88,11 @@ int main(int argc, char *argv[])
       struct abuse_vec vecs[max_queue];
 
       for(;;) {
-	int i;
+	__u32 i;
 	memset(&xfr, 0, sizeof(xfr));
 	xfr.ab_transfer_address = (__u64) vecs;
 	// read header
-	if (ioctl(fd, ABUSE_GET_BIO, &xfr) == -1) {
+	if (ioctl(fd, ABUSE_GET_REQ, &xfr) == -1) {
 	  if (errno != ENOMSG) {
 	    perror("GET_BIO failed");
 	    goto out;
@@ -116,7 +116,7 @@ int main(int argc, char *argv[])
 	  //printf("\toffset = %d, len = %d\n", vecs[i].ab_offset, vecs[i].ab_len);
 	  vecs[i].ab_address = (__u64)(data + 512 * xfr.ab_sector);
 	}
-	if (ioctl(fd, ABUSE_PUT_BIO, &xfr) == -1) {
+	if (ioctl(fd, ABUSE_PUT_REQ, &xfr) == -1) {
 	  perror("PUT_BIO failed");
 	  goto out;
 	}
