@@ -46,7 +46,7 @@ static int num_minors;
 static int dev_shift;
 
 static struct abuse_device *abuse_alloc(int i);
-static struct abuse_device *abuse_init_one(int i);
+static void abuse_del_one(struct abuse_device *ab);
 
 static struct abuse_device *abuse_get_dev(int dev)
 {
@@ -402,7 +402,7 @@ static int abuse_put_req(struct abuse_device *ab, struct abuse_xfr_hdr __user *a
 static long abctl_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
 	struct abuse_device *ab = filp->private_data;
-	struct abuse_device *new;
+	struct abuse_device *new, *remove;
 	int err;
 
 	if (!ab || !ab->ab_disk)
@@ -428,6 +428,7 @@ static long abctl_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		err = abuse_put_req(ab, (struct abuse_xfr_hdr __user *) arg);
 		break;
 	case ABUSE_CTL_ADD:
+		mutex_lock(&abuse_devices_mutex);
 		new = abuse_alloc(arg);
 		if (new) {
 			add_disk(new->ab_disk);
@@ -435,6 +436,18 @@ static long abctl_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 			err = new->ab_number;
 		} else {
 			err = -EEXIST; /* FIXME: better error handling */
+		}
+		mutex_unlock(&abuse_devices_mutex);
+		break;
+	case ABUSE_CTL_REMOVE:
+		remove = abuse_get_dev(arg);
+		if (remove == NULL) {
+			err = -ENOENT;
+		} else {
+			err = remove->ab_number;
+			mutex_lock(&abuse_devices_mutex);
+			abuse_del_one(remove);
+			mutex_unlock(&abuse_devices_mutex);
 		}
 		break;
 	default:
