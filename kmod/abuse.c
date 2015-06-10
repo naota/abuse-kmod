@@ -37,7 +37,6 @@
 
 #include <asm/uaccess.h>
 
-static LIST_HEAD(abuse_devices);
 static DEFINE_MUTEX(abuse_devices_mutex);
 static DEFINE_IDR(abuse_index_idr);
 static struct class *abuse_class;
@@ -47,22 +46,6 @@ static int dev_shift;
 
 static struct abuse_device *abuse_alloc(int i);
 static void abuse_del_one(struct abuse_device *ab);
-
-static struct abuse_device *abuse_get_dev(int dev)
-{
-	struct abuse_device *ab = NULL;
-
-	mutex_lock(&abuse_devices_mutex);
-	list_for_each_entry(ab, &abuse_devices, ab_list)
-		if (ab->ab_number == dev)
-			break;
-	mutex_unlock(&abuse_devices_mutex);
-
-	if (ab->ab_number == dev)
-		return ab;
-	else
-		return NULL;
-}
 
 /*
  * Add bio to back of pending list
@@ -432,7 +415,6 @@ static long abctl_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		new = abuse_alloc(arg);
 		if (new) {
 			add_disk(new->ab_disk);
-			list_add_tail(&new->ab_list, &abuse_devices);
 			err = new->ab_number;
 		} else {
 			err = -EEXIST; /* FIXME: better error handling */
@@ -440,7 +422,7 @@ static long abctl_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		mutex_unlock(&abuse_devices_mutex);
 		break;
 	case ABUSE_CTL_REMOVE:
-		remove = abuse_get_dev(arg);
+		remove = idr_find(&abuse_index_idr, arg);
 		if (remove == NULL) {
 			err = -ENOENT;
 		} else {
@@ -477,7 +459,7 @@ static int abctl_open(struct inode *inode, struct file *filp)
 {
 	struct abuse_device *ab;
 
-	ab = abuse_get_dev(iminor(inode));
+	ab = idr_find(&abuse_index_idr, iminor(inode));
 	if (!ab)
 		return -ENODEV;
 
@@ -654,7 +636,6 @@ static void abuse_free(struct abuse_device *ab)
 	device_destroy(abuse_class, MKDEV(ABUSECTL_MAJOR, ab->ab_number));
 	cdev_del(ab->ab_cdev);
 	put_disk(ab->ab_disk);
-	list_del(&ab->ab_list);
 	idr_remove(&abuse_index_idr, ab->ab_number);
 	kfree(ab);
 }
@@ -663,15 +644,13 @@ static struct abuse_device *abuse_init_one(int i)
 {
 	struct abuse_device *ab;
 
-	list_for_each_entry(ab, &abuse_devices, ab_list)
-		if (ab->ab_number == i)
-			return ab;
+	ab = idr_find(&abuse_index_idr, i);
+	if (ab)
+		return ab;
 
 	ab = abuse_alloc(i);
-	if (ab) {
+	if (ab)
 		add_disk(ab->ab_disk);
-		list_add_tail(&ab->ab_list, &abuse_devices);
-	}
 	return ab;
 }
 
@@ -695,11 +674,18 @@ static struct kobject *abuse_probe(dev_t dev, int *part, void *data)
 	return kobj;
 }
 
+static int abuse_exit_cb(int id, void *ptr, void *data)
+{
+	struct abuse_device *ab = ptr;
+	abuse_del_one(ab);
+	return 0;
+}
+
 static int __init abuse_init(void)
 {
 	int i, nr, err;
 	unsigned long range;
-	struct abuse_device *ab, *next;
+	struct abuse_device *ab;
 	struct device *device;
 
 	/*
@@ -755,18 +741,16 @@ static int __init abuse_init(void)
 			printk(KERN_INFO "abuse: out of memory\n");
 			goto free_devices;
 		}
-		list_add_tail(&ab->ab_list, &abuse_devices);
+		add_disk(ab->ab_disk);
 	}
 
 	/* point of no return */
-
-	list_for_each_entry(ab, &abuse_devices, ab_list)
-		add_disk(ab->ab_disk);
 
 	blk_register_region(MKDEV(ABUSE_MAJOR, 0), range,
 				  THIS_MODULE, abuse_probe, NULL, NULL);
 
 	/* add control device */
+	ab = idr_find(&abuse_index_idr, 0);
 	device = device_create(abuse_class, NULL, MKDEV(ABUSECTL_MAJOR, 0), ab, "abctl");
 	if (IS_ERR(device)) {
 		printk(KERN_ERR "abuse_init: abctl creation failed\n");
@@ -777,8 +761,7 @@ static int __init abuse_init(void)
 	return 0;
 
 free_devices:
-	list_for_each_entry_safe(ab, next, &abuse_devices, ab_list)
-		abuse_free(ab);
+	idr_for_each(&abuse_index_idr, abuse_exit_cb, NULL);
 unregister_chr:
 	unregister_chrdev_region(MKDEV(ABUSECTL_MAJOR, 0), range);
 unregister_blk:
@@ -789,12 +772,10 @@ unregister_blk:
 static void __exit abuse_exit(void)
 {
 	unsigned long range;
-	struct abuse_device *ab, *next;
 
 	range = max_abuse ? max_abuse :  1UL << (MINORBITS - dev_shift);
 
-	list_for_each_entry_safe(ab, next, &abuse_devices, ab_list)
-		abuse_del_one(ab);
+	idr_for_each(&abuse_index_idr, abuse_exit_cb, NULL);
 	idr_destroy(&abuse_index_idr);
 	class_destroy(abuse_class);
 	blk_unregister_region(MKDEV(ABUSE_MAJOR, 0), range);
