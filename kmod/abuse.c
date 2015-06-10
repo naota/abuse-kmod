@@ -57,7 +57,11 @@ static struct abuse_device *abuse_get_dev(int dev)
 		if (ab->ab_number == dev)
 			break;
 	mutex_unlock(&abuse_devices_mutex);
-	return ab;
+
+	if (ab->ab_number == dev)
+		return ab;
+	else
+		return NULL;
 }
 
 /*
