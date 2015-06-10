@@ -375,10 +375,10 @@ static int abuse_put_req(struct abuse_device *ab, struct abuse_xfr_hdr __user *a
 
 		if (rq_data_dir(req->rq) != WRITE)
 			ret = copy_from_user(kaddr + bvec.bv_offset,
-					     (void *)ab->ab_xfer[i].ab_address,
+					     (void __user *)ab->ab_xfer[i].ab_address,
 					     bvec.bv_len);
 		else
-			ret = copy_to_user((void *)ab->ab_xfer[i].ab_address,
+			ret = copy_to_user((void __user *)ab->ab_xfer[i].ab_address,
 					   kaddr + bvec.bv_offset, bvec.bv_len);
 
 		kunmap(bvec.bv_page);
