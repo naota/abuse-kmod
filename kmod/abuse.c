@@ -59,88 +59,23 @@ struct abuse_device *abuse_get_dev(int dev)
 /*
  * Add bio to back of pending list
  */
-static void abuse_add_bio(struct abuse_device *ab, struct bio *bio)
+
+static void abuse_flush_req(struct abuse_device *ab)
 {
-	if (ab->ab_biotail) {
-		ab->ab_biotail->bi_next = bio;
-		ab->ab_biotail = bio;
-	} else
-		ab->ab_bio = ab->ab_biotail = bio;
-	ab->ab_queue_size++;
-}
+	//struct bio *bio, *next;
 
-static inline void abuse_add_bio_unlocked(struct abuse_device *ab,
-	struct bio *bio)
-{
-	spin_lock_irq(&ab->ab_lock);
-	abuse_add_bio(ab, bio);
-	spin_unlock_irq(&ab->ab_lock);
-}
+	/* spin_lock_irq(&ab->ab_lock); */
+	/* bio = ab->ab_bio; */
+	/* ab->ab_biotail = ab->ab_bio = NULL; */
+	/* ab->ab_queue_size = 0; */
+	/* spin_unlock_irq(&ab->ab_lock); */
 
-static inline struct bio *abuse_find_bio(struct abuse_device *ab,
-	struct bio *match)
-{
-	struct bio *bio;
-	struct bio **pprev = &ab->ab_bio;
-
-	while ((bio = *pprev) != 0 && match && bio != match)
-		pprev = &bio->bi_next;
-
-	if (bio) {
-		if (bio == ab->ab_biotail) {
-			ab->ab_biotail = bio == ab->ab_bio ? NULL :
-			   (struct bio *)
-			   ((caddr_t)pprev - offsetof(struct bio, bi_next));
-		}
-		*pprev = bio->bi_next;
-		bio->bi_next = NULL;
-		ab->ab_queue_size--;
-	}
-
-	return bio;
-}
-
-static void abuse_make_request(struct request_queue *q, struct bio *old_bio)
-{
-	struct abuse_device *ab = q->queuedata;
-	int rw = bio_rw(old_bio);
-
-	if (rw == READA)
-		rw = READ;
-
-	BUG_ON(!ab || (rw != READ && rw != WRITE));
-
-	spin_lock_irq(&ab->ab_lock);
-	if (unlikely(rw == WRITE && (ab->ab_flags & ABUSE_FLAGS_READ_ONLY)))
-		goto out;
-	abuse_add_bio(ab, old_bio);
-	wake_up(&ab->ab_event);
-	spin_unlock_irq(&ab->ab_lock);
-	return;
-
-out:
-	ab->ab_errors++;
-	spin_unlock_irq(&ab->ab_lock);
-	bio_io_error(old_bio);
-	return;
-}
-
-static void abuse_flush_bio(struct abuse_device *ab)
-{
-	struct bio *bio, *next;
-
-	spin_lock_irq(&ab->ab_lock);
-	bio = ab->ab_bio;
-	ab->ab_biotail = ab->ab_bio = NULL;
-	ab->ab_queue_size = 0;
-	spin_unlock_irq(&ab->ab_lock);
-
-	while (bio) {
-		next = bio->bi_next;
-		bio->bi_next = NULL;
-		bio_io_error(bio);
-		bio = next;
-	}
+	/* while (bio) { */
+	/* 	next = bio->bi_next; */
+	/* 	bio->bi_next = NULL; */
+	/* 	bio_io_error(bio); */
+	/* 	bio = next; */
+	/* } */
 }
 
 static inline int is_abuse_device(struct file *file)
@@ -155,7 +90,7 @@ static int abuse_reset(struct abuse_device *ab)
 	if (!ab->ab_disk->queue)
 		return -EINVAL;
 
-	abuse_flush_bio(ab);
+	abuse_flush_req(ab);
 	ab->ab_flags = 0;
 	ab->ab_errors = 0;
 	ab->ab_blocksize = 0;
@@ -222,7 +157,6 @@ abuse_set_status_int(struct abuse_device *ab, struct block_device *bdev,
 	}
 
 	ab->ab_device = bdev;
-	blk_queue_make_request(ab->ab_queue, abuse_make_request);
 	ab->ab_queue->queuedata = ab;
 	queue_flag_set_unlocked(QUEUE_FLAG_NONROT, ab->ab_queue);
 
@@ -285,11 +219,10 @@ abuse_get_status(struct abuse_device *ab, struct block_device *bdev,
 	return err;
 }
 
-static int
-abuse_get_bio(struct abuse_device *ab, struct abuse_xfr_hdr __user *arg)
+static int abuse_get_req(struct abuse_device *ab, struct abuse_xfr_hdr __user *arg)
 {
 	struct abuse_xfr_hdr xfr;
-	struct bio *bio;
+	struct ab_req *req = NULL;
 
 	if (!arg)
 		return -EINVAL;
@@ -300,44 +233,66 @@ abuse_get_bio(struct abuse_device *ab, struct abuse_xfr_hdr __user *arg)
 		return -EFAULT;
 
 	spin_lock_irq(&ab->ab_lock);
-	bio = abuse_find_bio(ab, NULL);
-	xfr.ab_id = (__u64)bio;
-	if (bio) {
-		int i;
-		xfr.ab_sector = bio->bi_iter.bi_sector;
-		xfr.ab_command = (bio->bi_rw & RW_MASK);
-		xfr.ab_vec_count = bio->bi_vcnt;
-		for (i = 0; i < bio->bi_vcnt; i++) {
-			ab->ab_xfer[i].ab_len = bio->bi_io_vec[i].bv_len;
-			ab->ab_xfer[i].ab_offset = bio->bi_io_vec[i].bv_offset;
-		}
+	req = list_first_entry_or_null(&ab->ab_reqlist, struct ab_req, list);
+	if (req) {
+		struct req_iterator iter;
+		struct bio_vec bvec;
+		int i = 0;
 
-		/* Put it back to the end of the list */
-		abuse_add_bio(ab, bio);
+		list_move_tail(&req->list, &ab->ab_reqlist);
+		spin_unlock_irq(&ab->ab_lock);
+
+		xfr.ab_id = (__u64)req;
+		xfr.ab_command = rq_data_dir(req->rq);
+		xfr.ab_sector = blk_rq_pos(req->rq);
+		rq_for_each_segment(bvec, req->rq, iter) {
+			ab->ab_xfer[i].ab_len = bvec.bv_len;
+			ab->ab_xfer[i].ab_offset = bvec.bv_offset;
+			++i;
+		}
+		xfr.ab_vec_count = req->vec_cnt = i;
 	} else {
+		spin_unlock_irq(&ab->ab_lock);
+
 		xfr.ab_transfer_address = 0;
 		xfr.ab_vec_count = 0;
 	}
-	spin_unlock_irq(&ab->ab_lock);
 
 	if (copy_to_user(arg, &xfr, sizeof(xfr)))
 		return -EFAULT;
 	if (xfr.ab_transfer_address &&
-		copy_to_user((void *)xfr.ab_transfer_address, ab->ab_xfer,
+		copy_to_user((__user void *)xfr.ab_transfer_address, ab->ab_xfer,
 			     xfr.ab_vec_count * sizeof(ab->ab_xfer[0])))
 		return -EFAULT;
 
-	return bio ? 0 : -ENOMSG;
+	return req ? 0 : -ENOMSG;
 }
 
-static int
-abuse_put_bio(struct abuse_device *ab, struct abuse_xfr_hdr __user *arg)
+static struct ab_req *abuse_find_req(struct abuse_device *ab, __u64 id)
+{
+	struct ab_req *req = NULL;
+	list_for_each_entry(req, &ab->ab_reqlist, list) {
+		if ((__u64)req == id)
+			return req;
+	}
+	return NULL;
+}
+
+static inline void abuse_add_req(struct abuse_device *ab, struct ab_req *req)
+{
+	spin_lock_irq(&ab->ab_lock);
+	list_add_tail(&req->list, &ab->ab_reqlist);
+	spin_unlock_irq(&ab->ab_lock);
+}
+
+static int abuse_put_req(struct abuse_device *ab, struct abuse_xfr_hdr __user *arg)
 {
 	struct abuse_xfr_hdr xfr;
-	struct bio *bio;
+	struct ab_req *req = NULL;
+	struct req_iterator iter;
 	struct bio_vec bvec;
-	struct bvec_iter iter;
-	int i, read;
+	int i = 0;
+	unsigned long flags;
 
 	if (!arg)
 		return -EINVAL;
@@ -351,7 +306,7 @@ abuse_put_bio(struct abuse_device *ab, struct abuse_xfr_hdr __user *arg)
 	 * Handle catastrophes first.  Do this by giving them catnip.
 	 */
 	if (unlikely(xfr.ab_result == ABUSE_RESULT_DEVICE_FAILURE)) {
-		abuse_flush_bio(ab);
+		abuse_flush_req(ab);
 		return 0;
 	}
 
@@ -360,10 +315,14 @@ abuse_put_bio(struct abuse_device *ab, struct abuse_xfr_hdr __user *arg)
 	 * they've actually completed some work.  It's very doubtful.
 	 */
 	spin_lock_irq(&ab->ab_lock);
-	bio = abuse_find_bio(ab, (struct bio *)xfr.ab_id);
-	spin_unlock_irq(&ab->ab_lock);
-	if (!bio)
+	req = abuse_find_req(ab, xfr.ab_id);
+	if (req) {
+		list_del(&req->list);
+	} else {
+		spin_unlock_irq(&ab->ab_lock);
 		return -ENOMSG;
+	}
+	spin_unlock_irq(&ab->ab_lock);
 
 	/*
 	 * This isn't just arbitrary anal-retentiveness.  Userspace will
@@ -372,19 +331,17 @@ abuse_put_bio(struct abuse_device *ab, struct abuse_xfr_hdr __user *arg)
 	 * re-use the same bio and some user-tarded program tries to complete
 	 * an historical event.  Better prophylactics are possible, but crazy.
 	 */
-	if (bio->bi_iter.bi_sector != xfr.ab_sector ||
-	    bio->bi_vcnt != xfr.ab_vec_count ||
-	    (bio->bi_rw & RW_MASK) != xfr.ab_command) {
-	    	abuse_add_bio_unlocked(ab, bio);
+	if (blk_rq_pos(req->rq) != xfr.ab_sector ||
+	    rq_data_dir(req->rq) != xfr.ab_command) {
+		abuse_add_req(ab, req);
 		return -EINVAL;
 	}
-	read = !(bio->bi_rw & RW_MASK);
 
 	/*
 	 * Now handle individual failures that don't affect other I/Os.
 	 */
 	if (unlikely(xfr.ab_result == ABUSE_RESULT_MEDIA_FAILURE)) {
-		bio_io_error(bio);
+		blk_mq_end_request(req->rq, -EIO);
 		return 0;
 	}
 
@@ -395,40 +352,41 @@ abuse_put_bio(struct abuse_device *ab, struct abuse_xfr_hdr __user *arg)
 	 * to be expected from a userspace program, so be it.  The bio can
 	 * always be cancelled by a sane actor when we put it back.
 	 */
-	if (copy_from_user(ab->ab_xfer, (void *)xfr.ab_transfer_address,
-			     bio->bi_vcnt * sizeof(ab->ab_xfer[0]))) {
-	    	abuse_add_bio_unlocked(ab, bio);
+	if (copy_from_user(ab->ab_xfer, (__user void *)xfr.ab_transfer_address,
+			     req->vec_cnt * sizeof(ab->ab_xfer[0]))) {
+		abuse_add_req(ab, req);
 		return -EFAULT;
 	}
 
 	/*
 	 * You made it this far?  It's time for the third movement.
 	 */
-	i = 0;
-	bio_for_each_segment(bvec, bio, iter)
-	{
+	rq_for_each_segment(bvec, req->rq, iter) {
 		int ret;
 		void *kaddr = kmap(bvec.bv_page);
 
-		if (read)
+		if (rq_data_dir(req->rq) != WRITE)
 			ret = copy_from_user(kaddr + bvec.bv_offset,
-				(void *)ab->ab_xfer[i].ab_address,
-				bvec.bv_len);
+					     (void *)ab->ab_xfer[i].ab_address,
+					     bvec.bv_len);
 		else
 			ret = copy_to_user((void *)ab->ab_xfer[i].ab_address,
-				kaddr + bvec.bv_offset, bvec.bv_len);
+					   kaddr + bvec.bv_offset, bvec.bv_len);
 
 		kunmap(bvec.bv_page);
 		if (ret != 0) {
 			/* Wise, up sucker! (PWEI RULEZ) */
-			abuse_add_bio_unlocked(ab, bio);
+			abuse_add_req(ab, req);
 			return -EFAULT;
 		}
 		++i;
 	}
 
 	/* Well, you did it.  Congraulations, you get a pony. */
-	bio_endio(bio, 0);
+	pr_info("rq->q: %p\n", req->rq->q);
+	spin_lock_irqsave(req->rq->q->queue_lock, flags);
+	blk_mq_end_request(req->rq, 0);
+	spin_unlock_irqrestore(req->rq->q->queue_lock, flags);
 
 	return 0;
 }
@@ -454,11 +412,11 @@ static long abctl_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	case ABUSE_RESET:
 		err = abuse_reset(ab);
 		break;
-	case ABUSE_GET_BIO:
-		err = abuse_get_bio(ab, (struct abuse_xfr_hdr __user *) arg);
+	case ABUSE_GET_REQ:
+		err = abuse_get_req(ab, (struct abuse_xfr_hdr __user *) arg);
 		break;
-	case ABUSE_PUT_BIO:
-		err = abuse_put_bio(ab, (struct abuse_xfr_hdr __user *) arg);
+	case ABUSE_PUT_REQ:
+		err = abuse_put_req(ab, (struct abuse_xfr_hdr __user *) arg);
 		break;
 	default:
 		err = -EINVAL;
@@ -478,7 +436,7 @@ static unsigned int abctl_poll(struct file *filp, poll_table *wait)
 	 * The comment in asm-generic/poll.h says of these nonstandard values,
 	 * 'Check them!'.  Thus we use POLLMSG to force the user to check it.
 	 */
-	mask = (ab->ab_bio) ? POLLMSG : 0;
+	mask = (list_empty(&ab->ab_reqlist)) ? 0 : POLLMSG;
 
 	return mask;
 }
@@ -539,20 +497,68 @@ MODULE_PARM_DESC(max_part, "Maximum number of partitions per abuse device");
 MODULE_LICENSE("GPL");
 MODULE_ALIAS_BLOCKDEV_MAJOR(ABUSE_MAJOR);
 
+static int abuse_init_request(void *data, struct request *rq,
+		unsigned int hctx_idx, unsigned int request_idx,
+		unsigned int numa_node)
+{
+	struct ab_req *req = blk_mq_rq_to_pdu(rq);
+
+	req->rq = rq;
+
+	return 0;
+}
+
+static int abuse_queue_rq(struct blk_mq_hw_ctx *hctx, const struct blk_mq_queue_data *bd)
+{
+	struct ab_req *req = blk_mq_rq_to_pdu(bd->rq);
+	struct abuse_device *ab = req->rq->q->queuedata;
+
+	blk_mq_start_request(bd->rq);
+
+	spin_lock_irq(&ab->ab_lock);
+	list_add_tail(&req->list, &ab->ab_reqlist);
+	wake_up(&ab->ab_event);
+	spin_unlock_irq(&ab->ab_lock);
+
+	pr_info("abuse_queue_rq rq->q: %p\n", req->rq->q);
+
+	return BLK_MQ_RQ_QUEUE_OK;;
+}
+
+static struct blk_mq_ops abuse_mq_ops = {
+	.queue_rq       = abuse_queue_rq,
+	.map_queue      = blk_mq_map_queue,
+	.init_request	= abuse_init_request,
+};
+
 static struct abuse_device *abuse_alloc(int i)
 {
 	struct abuse_device *ab;
 	struct gendisk *disk;
 	struct cdev *cdev;
 	struct device *device;
+	int err;
 
 	ab = kzalloc(sizeof(*ab), GFP_KERNEL);
 	if (!ab)
 		goto out;
 
-	ab->ab_queue = blk_alloc_queue(GFP_KERNEL);
-	if (!ab->ab_queue)
+	ab->tag_set.ops = &abuse_mq_ops;
+	ab->tag_set.nr_hw_queues = 1;
+	ab->tag_set.queue_depth = 128;
+	ab->tag_set.numa_node = NUMA_NO_NODE;
+	ab->tag_set.cmd_size = sizeof(struct ab_req);
+	ab->tag_set.flags = BLK_MQ_F_SHOULD_MERGE | BLK_MQ_F_SG_MERGE;
+	ab->tag_set.driver_data = ab;
+
+	err = blk_mq_alloc_tag_set(&ab->tag_set);
+	if (err)
 		goto out_free_dev;
+
+	ab->ab_queue = blk_mq_init_queue(&ab->tag_set);
+	if (IS_ERR_OR_NULL(ab->ab_queue))
+		goto out_cleanup_tags;
+	ab->ab_queue->queuedata = ab;
 
 	disk = ab->ab_disk = alloc_disk(num_minors);
 	if (!disk)
@@ -595,6 +601,8 @@ out_free_disk:
 	put_disk(ab->ab_disk);
 out_free_queue:
 	blk_cleanup_queue(ab->ab_queue);
+out_cleanup_tags:
+	blk_mq_free_tag_set(&ab->tag_set);
 out_free_dev:
 	kfree(ab);
 out:
@@ -623,6 +631,7 @@ static struct abuse_device *abuse_init_one(int i)
 	if (ab) {
 		add_disk(ab->ab_disk);
 		list_add_tail(&ab->ab_list, &abuse_devices);
+		INIT_LIST_HEAD(&ab->ab_reqlist);
 	}
 	return ab;
 }
@@ -707,6 +716,7 @@ static int __init abuse_init(void)
 			goto free_devices;
 		}
 		list_add_tail(&ab->ab_list, &abuse_devices);
+		INIT_LIST_HEAD(&ab->ab_reqlist);
 	}
 
 	/* point of no return */

@@ -74,14 +74,14 @@ int main(int argc, char *argv[])
   // main loop waiting for IO
   while (ppoll(fds, FDCNT, NULL, NULL) > 0) {
     if (fds[0].revents) {
-      int i;
+      __u32 i;
       struct abuse_xfr_hdr xfr;
       struct abuse_vec *vecs = malloc(max_queue * sizeof(struct abuse_vec));
 
       memset(&xfr, 0, sizeof(xfr));
       xfr.ab_transfer_address = (__u64) vecs;
       // read header
-      if (ioctl(fd, ABUSE_GET_BIO, &xfr) == -1) {
+      if (ioctl(fd, ABUSE_GET_REQ, &xfr) == -1) {
 	free(vecs);
 	perror("GET_BIO failed");
 	teardown();
@@ -102,7 +102,7 @@ int main(int argc, char *argv[])
       for (i=0; i<xfr.ab_vec_count; ++i)
 	vecs[i].ab_address = (__u64)malloc(vecs[i].ab_len);
       if (write) {
-	ioctl(fd, ABUSE_PUT_BIO, &xfr);
+	ioctl(fd, ABUSE_PUT_REQ, &xfr);
 
 	// Now we received data
 	for (i=0; i<xfr.ab_vec_count; ++i) {
@@ -123,7 +123,7 @@ int main(int argc, char *argv[])
 	  // FIXME: currently it behave like /dev/zero
 	  memset((char*)vecs[i].ab_address, 0, vecs[i].ab_len);
 	}
-	ioctl(fd, ABUSE_PUT_BIO, &xfr);
+	ioctl(fd, ABUSE_PUT_REQ, &xfr);
       }
       for (i=0; i<xfr.ab_vec_count; ++i)
 	free((struct abuse_vec*)vecs[i].ab_address);
