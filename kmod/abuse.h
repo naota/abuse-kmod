@@ -41,6 +41,10 @@ struct abuse_info {
 #define ABUSE_GET_REQ		0x4124
 #define ABUSE_PUT_REQ		0x4125
 
+#define ABUSE_CTL_ADD		0x4186
+#define ABUSE_CTL_REMOVE	0x4187
+#define ABUSE_CTL_GET_FREE	0x4188
+
 struct abuse_vec {
 	__u64			ab_address;
 	__u32			ab_len;
