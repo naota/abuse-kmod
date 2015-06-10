@@ -592,6 +592,7 @@ static struct abuse_device *abuse_alloc(int i)
 	ab->ab_number		= i;
 	init_waitqueue_head(&ab->ab_event);
 	spin_lock_init(&ab->ab_lock);
+	INIT_LIST_HEAD(&ab->ab_reqlist);
 
 	return ab;
 
@@ -631,7 +632,6 @@ static struct abuse_device *abuse_init_one(int i)
 	if (ab) {
 		add_disk(ab->ab_disk);
 		list_add_tail(&ab->ab_list, &abuse_devices);
-		INIT_LIST_HEAD(&ab->ab_reqlist);
 	}
 	return ab;
 }
@@ -716,7 +716,6 @@ static int __init abuse_init(void)
 			goto free_devices;
 		}
 		list_add_tail(&ab->ab_list, &abuse_devices);
-		INIT_LIST_HEAD(&ab->ab_reqlist);
 	}
 
 	/* point of no return */
