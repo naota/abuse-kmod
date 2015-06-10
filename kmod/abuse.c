@@ -39,12 +39,16 @@
 
 static LIST_HEAD(abuse_devices);
 static DEFINE_MUTEX(abuse_devices_mutex);
+static DEFINE_IDR(abuse_index_idr);
 static struct class *abuse_class;
 static int max_part;
 static int num_minors;
 static int dev_shift;
 
-struct abuse_device *abuse_get_dev(int dev)
+static struct abuse_device *abuse_alloc(int i);
+static struct abuse_device *abuse_init_one(int i);
+
+static struct abuse_device *abuse_get_dev(int dev)
 {
 	struct abuse_device *ab = NULL;
 
@@ -394,6 +398,7 @@ static int abuse_put_req(struct abuse_device *ab, struct abuse_xfr_hdr __user *a
 static long abctl_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
 	struct abuse_device *ab = filp->private_data;
+	struct abuse_device *new;
 	int err;
 
 	if (!ab || !ab->ab_disk)
@@ -417,6 +422,16 @@ static long abctl_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		break;
 	case ABUSE_PUT_REQ:
 		err = abuse_put_req(ab, (struct abuse_xfr_hdr __user *) arg);
+		break;
+	case ABUSE_CTL_ADD:
+		new = abuse_alloc(arg);
+		if (new) {
+			add_disk(new->ab_disk);
+			list_add_tail(&new->ab_list, &abuse_devices);
+			err = new->ab_number;
+		} else {
+			err = -EEXIST; /* FIXME: better error handling */
+		}
 		break;
 	default:
 		err = -EINVAL;
@@ -531,17 +546,28 @@ static struct blk_mq_ops abuse_mq_ops = {
 	.init_request	= abuse_init_request,
 };
 
+/* FIXME: error propagation */
 static struct abuse_device *abuse_alloc(int i)
 {
 	struct abuse_device *ab;
 	struct gendisk *disk;
 	struct cdev *cdev;
-	struct device *device;
 	int err;
 
 	ab = kzalloc(sizeof(*ab), GFP_KERNEL);
 	if (!ab)
 		goto out;
+
+	if (i >= 0) {
+		err = idr_alloc(&abuse_index_idr, ab, i, i + 1, GFP_KERNEL);
+		if (err == -ENOSPC)
+			err = -EEXIST;
+	} else {
+		err = idr_alloc(&abuse_index_idr, ab, 0, 0, GFP_KERNEL);
+	}
+	if (err < 0)
+		goto out_free_dev;
+	i = err;
 
 	ab->tag_set.ops = &abuse_mq_ops;
 	ab->tag_set.nr_hw_queues = 1;
@@ -553,7 +579,7 @@ static struct abuse_device *abuse_alloc(int i)
 
 	err = blk_mq_alloc_tag_set(&ab->tag_set);
 	if (err)
-		goto out_free_dev;
+		goto out_free_idr;
 
 	ab->ab_queue = blk_mq_init_queue(&ab->tag_set);
 	if (IS_ERR_OR_NULL(ab->ab_queue))
@@ -581,13 +607,6 @@ static struct abuse_device *abuse_alloc(int i)
 	if (cdev_add(ab->ab_cdev, MKDEV(ABUSECTL_MAJOR, i), 1) != 0)
 		goto out_free_cdev;
 
-	device = device_create(abuse_class, NULL, MKDEV(ABUSECTL_MAJOR, i), ab,
-				"abctl%d", i);
-	if (IS_ERR(device)) {
-		printk(KERN_ERR "abuse_alloc: device_create failed\n");
-		goto out_free_cdev;
-	}
-
 	mutex_init(&ab->ab_ctl_mutex);
 	ab->ab_number		= i;
 	init_waitqueue_head(&ab->ab_event);
@@ -604,6 +623,8 @@ out_free_queue:
 	blk_cleanup_queue(ab->ab_queue);
 out_cleanup_tags:
 	blk_mq_free_tag_set(&ab->tag_set);
+out_free_idr:
+	idr_remove(&abuse_index_idr, i);
 out_free_dev:
 	kfree(ab);
 out:
@@ -617,6 +638,7 @@ static void abuse_free(struct abuse_device *ab)
 	cdev_del(ab->ab_cdev);
 	put_disk(ab->ab_disk);
 	list_del(&ab->ab_list);
+	idr_remove(&abuse_index_idr, ab->ab_number);
 	kfree(ab);
 }
 
@@ -661,6 +683,7 @@ static int __init abuse_init(void)
 	int i, nr, err;
 	unsigned long range;
 	struct abuse_device *ab, *next;
+	struct device *device;
 
 	/*
 	 * abuse module has a feature to instantiate underlying device
@@ -726,6 +749,13 @@ static int __init abuse_init(void)
 	blk_register_region(MKDEV(ABUSE_MAJOR, 0), range,
 				  THIS_MODULE, abuse_probe, NULL, NULL);
 
+	/* add control device */
+	device = device_create(abuse_class, NULL, MKDEV(ABUSECTL_MAJOR, 0), ab, "abctl");
+	if (IS_ERR(device)) {
+		printk(KERN_ERR "abuse_init: abctl creation failed\n");
+		goto free_devices; /* FIXME: confirm error handling */
+	}
+
 	printk(KERN_INFO "abuse: module loaded\n");
 	return 0;
 
@@ -748,6 +778,7 @@ static void __exit abuse_exit(void)
 
 	list_for_each_entry_safe(ab, next, &abuse_devices, ab_list)
 		abuse_del_one(ab);
+	idr_destroy(&abuse_index_idr);
 	class_destroy(abuse_class);
 	blk_unregister_region(MKDEV(ABUSE_MAJOR, 0), range);
 	unregister_chrdev_region(MKDEV(ABUSECTL_MAJOR, 0), range);
