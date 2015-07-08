@@ -5,4 +5,4 @@ default:
 check:
 	$(MAKE) -C $(KDIR) M=$$PWD C=1
 clean:
-	rm -f abuse.ko abuse.o
+	$(MAKE) -C $(KDIR) M=$$PWD clean
