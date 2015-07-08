@@ -58,5 +58,8 @@ int main()
   assert(err == ENOENT);
 
   close(fd);
+
+  printf("All test PASS!\n");
+
   return 0;
 }
