@@ -110,7 +110,6 @@ struct abuse_device {
 	struct request_queue	*ab_queue;
 	struct blk_mq_tag_set	tag_set;
 	struct gendisk		*ab_disk;
-	struct cdev		*ab_cdev;
 
 	/* user xfer area */
 	struct abuse_vec	ab_xfer[BIO_MAX_PAGES];
