@@ -378,13 +378,52 @@ static int abuse_put_req(struct abuse_device *ab, struct abuse_xfr_hdr __user *a
 	return 0;
 }
 
+static int abuse_acquire(struct file *ctl, unsigned long arg)
+{
+	struct file *dev;
+	struct abuse_device *ab;
+
+	if (ctl->private_data)
+		return -EBUSY;
+
+	dev = fget(arg);
+	if (!dev)
+		return -EBADF;
+
+	ab = idr_find(&abuse_index_idr, iminor(dev->f_inode));
+	fput(dev);
+	if (!ab)
+		return -ENODEV;
+
+	ctl->private_data = ab;
+
+	return 0;
+}
+
+static int abuse_release(struct file *filp)
+{
+	struct abuse_device *ab = filp->private_data;
+
+	if (ab == NULL)
+		return -ENODEV;
+
+	filp->private_data = NULL;
+
+	return 0;
+}
+
 static long abctl_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
 	struct abuse_device *ab = filp->private_data;
 	struct abuse_device *new, *remove;
 	int err;
 
-	mutex_lock(&abctl_mutex);
+	if (cmd < ABUSE_CTL_ADD) {
+		if (ab == NULL)
+			return -EINVAL;
+		mutex_lock(&ab->ab_ctl_mutex);
+	}
+
 	switch (cmd) {
 	case ABUSE_GET_STATUS:
 		err = abuse_get_status(ab, ab->ab_device,
@@ -426,10 +465,20 @@ static long abctl_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		}
 		mutex_unlock(&abuse_devices_mutex);
 		break;
+	case ABUSE_ACQUIRE:
+		err = abuse_acquire(filp, arg);
+		break;
+	case ABUSE_RELEASE:
+		err = abuse_release(filp);
+		break;
 	default:
 		err = -EINVAL;
 	}
-	mutex_unlock(&abctl_mutex);
+
+	if (cmd < ABUSE_CTL_ADD) {
+		mutex_unlock(&ab->ab_ctl_mutex);
+	}
+
 	return err;
 }
 
@@ -437,6 +486,9 @@ static unsigned int abctl_poll(struct file *filp, poll_table *wait)
 {
 	unsigned int mask;
 	struct abuse_device *ab = filp->private_data;
+
+	if (ab == NULL)
+		return -ENODEV;
 
 	poll_wait(filp, &ab->ab_event, wait);
 
@@ -451,9 +503,16 @@ static unsigned int abctl_poll(struct file *filp, poll_table *wait)
 
 static int abctl_release(struct inode *inode, struct file *filp)
 {
-	struct abuse_device *ab = filp->private_data;
-	if (!ab)
-		return -ENODEV;
+	struct file *dev = filp->private_data;
+
+	if (dev) {
+		struct abuse_device *ab = dev->private_data;
+
+		fput(dev);
+		filp->private_data = NULL;
+		if (!ab)
+			return -ENODEV;
+	}
 
 	return 0;
 }
@@ -468,15 +527,21 @@ static void ab_release(struct gendisk *disk, fmode_t mode)
 	return;
 }
 
+static int abctl_open(struct inode *nodp, struct file *filp)
+{
+	filp->private_data = NULL;
+	return 0;
+}
+
 static struct block_device_operations ab_fops = {
 	.owner =	THIS_MODULE,
-	.open =		ab_open,
+	.open =	ab_open,
 	.release =	ab_release,
 };
 
 static struct file_operations abctl_fops = {
 	.owner =		THIS_MODULE,
-	.open =		nonseekable_open,
+	.open =		abctl_open,
 	.release =		abctl_release,
 	.unlocked_ioctl =	abctl_ioctl,
 	.poll =		abctl_poll,
