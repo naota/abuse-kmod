@@ -589,7 +589,6 @@ static int abuse_queue_rq(struct blk_mq_hw_ctx *hctx, const struct blk_mq_queue_
 	wake_up(&ab->ab_event);
 	spin_unlock_irq(&ab->ab_lock);
 
-	pr_info("abuse_queue_rq rq->q: %p\n", req->rq->q);
 
 	return BLK_MQ_RQ_QUEUE_OK;;
 }
