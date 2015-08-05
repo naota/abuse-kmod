@@ -17,15 +17,17 @@ int fd;
 void teardown()
 {
   ioctl(fd, ABUSE_RESET);
+  ioctl(fd, ABUSE_RELEASE);
   return;
 }
 
 const int max_queue = 1 << 16;
-const long size = 512 * 1024 * 1024;
+const long size = 1024 * 1024 * 1024;
 
 int main(int argc, char *argv[])
 {
-  char *abctlpath = argv[1];
+  const char *abctlpath = "/dev/abctl";
+  char *abdevpath = argv[1];
 
   unsigned char *data = malloc(size);
   if (data == NULL) {
@@ -38,6 +40,18 @@ int main(int argc, char *argv[])
   if (fd < 0) {
     fprintf(stderr, "Failed to open %s: ", abctlpath);
     perror(NULL);
+    return -1;
+  }
+
+  int devfd = open(abdevpath, O_RDWR);
+  if (devfd < 0) {
+    fprintf(stderr, "Failed to open %s: ", abdevpath);
+    perror(NULL);
+    return -1;
+  }
+
+  if (ioctl(fd, ABUSE_ACQUIRE, devfd) == -1)  {
+    perror("ACQUIRE failed");
     return -1;
   }
 
@@ -134,6 +148,7 @@ int main(int argc, char *argv[])
  out:
   fprintf(stderr, "Exiting\n");
   teardown();
+  close(devfd);
   close(fd);
   return 0;
 }
