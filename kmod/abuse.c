@@ -371,7 +371,6 @@ static int abuse_put_req(struct abuse_device *ab, struct abuse_xfr_hdr __user *a
 	}
 
 	/* Well, you did it.  Congraulations, you get a pony. */
-	pr_info("rq->q: %p\n", req->rq->q);
 	spin_lock_irqsave(req->rq->q->queue_lock, flags);
 	blk_mq_end_request(req->rq, 0);
 	spin_unlock_irqrestore(req->rq->q->queue_lock, flags);
