@@ -41,6 +41,13 @@ struct abuse_info {
 #define ABUSE_GET_REQ		0x4124
 #define ABUSE_PUT_REQ		0x4125
 
+#define ABUSE_CTL_ADD		0x4186
+#define ABUSE_CTL_REMOVE	0x4187
+#define ABUSE_CTL_GET_FREE	0x4188
+
+#define ABUSE_ACQUIRE		0x4189
+#define ABUSE_RELEASE		0x418A
+
 struct abuse_vec {
 	__u64			ab_address;
 	__u32			ab_len;
@@ -106,8 +113,6 @@ struct abuse_device {
 	struct request_queue	*ab_queue;
 	struct blk_mq_tag_set	tag_set;
 	struct gendisk		*ab_disk;
-	struct cdev		*ab_cdev;
-	struct list_head	ab_list;
 
 	/* user xfer area */
 	struct abuse_vec	ab_xfer[BIO_MAX_PAGES];

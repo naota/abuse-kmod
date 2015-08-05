@@ -33,28 +33,21 @@
 #include <linux/buffer_head.h>		/* for invalidate_bdev() */
 #include <linux/cdev.h>
 #include <linux/poll.h>
+#include <linux/miscdevice.h>
 #include "abuse.h"
 
 #include <asm/uaccess.h>
 
-static LIST_HEAD(abuse_devices);
 static DEFINE_MUTEX(abuse_devices_mutex);
+static DEFINE_MUTEX(abctl_mutex);
+static DEFINE_IDR(abuse_index_idr);
 static struct class *abuse_class;
 static int max_part;
 static int num_minors;
 static int dev_shift;
 
-struct abuse_device *abuse_get_dev(int dev)
-{
-	struct abuse_device *ab = NULL;
-
-	mutex_lock(&abuse_devices_mutex);
-	list_for_each_entry(ab, &abuse_devices, ab_list)
-		if (ab->ab_number == dev)
-			break;
-	mutex_unlock(&abuse_devices_mutex);
-	return ab;
-}
+static struct abuse_device *abuse_alloc(int i);
+static void abuse_del_one(struct abuse_device *ab);
 
 /*
  * Add bio to back of pending list
@@ -62,20 +55,15 @@ struct abuse_device *abuse_get_dev(int dev)
 
 static void abuse_flush_req(struct abuse_device *ab)
 {
-	//struct bio *bio, *next;
+	struct ab_req *req = NULL, *tmp;
 
-	/* spin_lock_irq(&ab->ab_lock); */
-	/* bio = ab->ab_bio; */
-	/* ab->ab_biotail = ab->ab_bio = NULL; */
-	/* ab->ab_queue_size = 0; */
-	/* spin_unlock_irq(&ab->ab_lock); */
-
-	/* while (bio) { */
-	/* 	next = bio->bi_next; */
-	/* 	bio->bi_next = NULL; */
-	/* 	bio_io_error(bio); */
-	/* 	bio = next; */
-	/* } */
+	spin_lock_irq(&ab->ab_lock);
+	list_for_each_entry_safe(req, tmp, &ab->ab_reqlist, list) {
+		req->rq->cmd_flags |= REQ_FAILED;
+		blk_complete_request(req->rq);
+		list_del(&req->list);
+	}
+	spin_unlock_irq(&ab->ab_lock);
 }
 
 static inline int is_abuse_device(struct file *file)
@@ -367,10 +355,10 @@ static int abuse_put_req(struct abuse_device *ab, struct abuse_xfr_hdr __user *a
 
 		if (rq_data_dir(req->rq) != WRITE)
 			ret = copy_from_user(kaddr + bvec.bv_offset,
-					     (void *)ab->ab_xfer[i].ab_address,
+					     (void __user *)ab->ab_xfer[i].ab_address,
 					     bvec.bv_len);
 		else
-			ret = copy_to_user((void *)ab->ab_xfer[i].ab_address,
+			ret = copy_to_user((void __user *)ab->ab_xfer[i].ab_address,
 					   kaddr + bvec.bv_offset, bvec.bv_len);
 
 		kunmap(bvec.bv_page);
@@ -383,7 +371,6 @@ static int abuse_put_req(struct abuse_device *ab, struct abuse_xfr_hdr __user *a
 	}
 
 	/* Well, you did it.  Congraulations, you get a pony. */
-	pr_info("rq->q: %p\n", req->rq->q);
 	spin_lock_irqsave(req->rq->q->queue_lock, flags);
 	blk_mq_end_request(req->rq, 0);
 	spin_unlock_irqrestore(req->rq->q->queue_lock, flags);
@@ -391,15 +378,52 @@ static int abuse_put_req(struct abuse_device *ab, struct abuse_xfr_hdr __user *a
 	return 0;
 }
 
+static int abuse_acquire(struct file *ctl, unsigned long arg)
+{
+	struct file *dev;
+	struct abuse_device *ab;
+
+	if (ctl->private_data)
+		return -EBUSY;
+
+	dev = fget(arg);
+	if (!dev)
+		return -EBADF;
+
+	ab = idr_find(&abuse_index_idr, iminor(dev->f_inode));
+	fput(dev);
+	if (!ab)
+		return -ENODEV;
+
+	ctl->private_data = ab;
+
+	return 0;
+}
+
+static int abuse_release(struct file *filp)
+{
+	struct abuse_device *ab = filp->private_data;
+
+	if (ab == NULL)
+		return -ENODEV;
+
+	filp->private_data = NULL;
+
+	return 0;
+}
+
 static long abctl_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
 	struct abuse_device *ab = filp->private_data;
+	struct abuse_device *new, *remove;
 	int err;
 
-	if (!ab || !ab->ab_disk)
-		return -ENODEV;
+	if (cmd < ABUSE_CTL_ADD) {
+		if (ab == NULL)
+			return -EINVAL;
+		mutex_lock(&ab->ab_ctl_mutex);
+	}
 
-	mutex_lock(&ab->ab_ctl_mutex);
 	switch (cmd) {
 	case ABUSE_GET_STATUS:
 		err = abuse_get_status(ab, ab->ab_device,
@@ -418,10 +442,43 @@ static long abctl_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	case ABUSE_PUT_REQ:
 		err = abuse_put_req(ab, (struct abuse_xfr_hdr __user *) arg);
 		break;
+	case ABUSE_CTL_ADD:
+		mutex_lock(&abuse_devices_mutex);
+		new = abuse_alloc(arg);
+		if (new) {
+			add_disk(new->ab_disk);
+			err = new->ab_number;
+		} else {
+			err = -EEXIST; /* FIXME: better error handling */
+		}
+		mutex_unlock(&abuse_devices_mutex);
+		break;
+	case ABUSE_CTL_REMOVE:
+		mutex_lock(&abuse_devices_mutex);
+		remove = idr_find(&abuse_index_idr, arg);
+		if (remove == NULL) {
+			err = -ENOENT;
+		} else {
+			err = remove->ab_number;
+			idr_remove(&abuse_index_idr, remove->ab_number);
+			abuse_del_one(remove);
+		}
+		mutex_unlock(&abuse_devices_mutex);
+		break;
+	case ABUSE_ACQUIRE:
+		err = abuse_acquire(filp, arg);
+		break;
+	case ABUSE_RELEASE:
+		err = abuse_release(filp);
+		break;
 	default:
 		err = -EINVAL;
 	}
-	mutex_unlock(&ab->ab_ctl_mutex);
+
+	if (cmd < ABUSE_CTL_ADD) {
+		mutex_unlock(&ab->ab_ctl_mutex);
+	}
+
 	return err;
 }
 
@@ -429,6 +486,9 @@ static unsigned int abctl_poll(struct file *filp, poll_table *wait)
 {
 	unsigned int mask;
 	struct abuse_device *ab = filp->private_data;
+
+	if (ab == NULL)
+		return -ENODEV;
 
 	poll_wait(filp, &ab->ab_event, wait);
 
@@ -441,23 +501,18 @@ static unsigned int abctl_poll(struct file *filp, poll_table *wait)
 	return mask;
 }
 
-static int abctl_open(struct inode *inode, struct file *filp)
-{
-	struct abuse_device *ab;
-
-	ab = abuse_get_dev(iminor(inode));
-	if (!ab)
-		return -ENODEV;
-
-	filp->private_data = ab;
-	return 0;
-}
-
 static int abctl_release(struct inode *inode, struct file *filp)
 {
-	struct abuse_device *ab = filp->private_data;
-	if (!ab)
-		return -ENODEV;
+	struct file *dev = filp->private_data;
+
+	if (dev) {
+		struct abuse_device *ab = dev->private_data;
+
+		fput(dev);
+		filp->private_data = NULL;
+		if (!ab)
+			return -ENODEV;
+	}
 
 	return 0;
 }
@@ -472,19 +527,33 @@ static void ab_release(struct gendisk *disk, fmode_t mode)
 	return;
 }
 
+static int abctl_open(struct inode *nodp, struct file *filp)
+{
+	filp->private_data = NULL;
+	return 0;
+}
+
 static struct block_device_operations ab_fops = {
 	.owner =	THIS_MODULE,
-	.open =		ab_open,
+	.open =	ab_open,
 	.release =	ab_release,
 };
 
 static struct file_operations abctl_fops = {
-	.owner =	THIS_MODULE,
+	.owner =		THIS_MODULE,
 	.open =		abctl_open,
-	.release =	abctl_release,
+	.release =		abctl_release,
 	.unlocked_ioctl =	abctl_ioctl,
 	.poll =		abctl_poll,
 };
+
+static struct miscdevice abuse_misc = {
+	.minor = MISC_DYNAMIC_MINOR,
+	.name = "abctl",
+	.fops = &abctl_fops,
+};
+
+MODULE_ALIAS("devname:abctl");
 
 /*
  * And now the modules code and kernel interface.
@@ -520,7 +589,6 @@ static int abuse_queue_rq(struct blk_mq_hw_ctx *hctx, const struct blk_mq_queue_
 	wake_up(&ab->ab_event);
 	spin_unlock_irq(&ab->ab_lock);
 
-	pr_info("abuse_queue_rq rq->q: %p\n", req->rq->q);
 
 	return BLK_MQ_RQ_QUEUE_OK;;
 }
@@ -531,17 +599,27 @@ static struct blk_mq_ops abuse_mq_ops = {
 	.init_request	= abuse_init_request,
 };
 
+/* FIXME: error propagation */
 static struct abuse_device *abuse_alloc(int i)
 {
 	struct abuse_device *ab;
 	struct gendisk *disk;
-	struct cdev *cdev;
-	struct device *device;
 	int err;
 
 	ab = kzalloc(sizeof(*ab), GFP_KERNEL);
 	if (!ab)
 		goto out;
+
+	if (i >= 0) {
+		err = idr_alloc(&abuse_index_idr, ab, i, i + 1, GFP_KERNEL);
+		if (err == -ENOSPC)
+			err = -EEXIST;
+	} else {
+		err = idr_alloc(&abuse_index_idr, ab, 0, 0, GFP_KERNEL);
+	}
+	if (err < 0)
+		goto out_free_dev;
+	i = err;
 
 	ab->tag_set.ops = &abuse_mq_ops;
 	ab->tag_set.nr_hw_queues = 1;
@@ -553,7 +631,7 @@ static struct abuse_device *abuse_alloc(int i)
 
 	err = blk_mq_alloc_tag_set(&ab->tag_set);
 	if (err)
-		goto out_free_dev;
+		goto out_free_idr;
 
 	ab->ab_queue = blk_mq_init_queue(&ab->tag_set);
 	if (IS_ERR_OR_NULL(ab->ab_queue))
@@ -571,38 +649,20 @@ static struct abuse_device *abuse_alloc(int i)
 	disk->queue		= ab->ab_queue;
 	sprintf(disk->disk_name, "abuse%d", i);
 
-	cdev = ab->ab_cdev = cdev_alloc();
-	if (!cdev)
-		goto out_free_disk;
-
-	cdev->owner = THIS_MODULE;
-	cdev->ops = &abctl_fops;
-
-	if (cdev_add(ab->ab_cdev, MKDEV(ABUSECTL_MAJOR, i), 1) != 0)
-		goto out_free_cdev;
-
-	device = device_create(abuse_class, NULL, MKDEV(ABUSECTL_MAJOR, i), ab,
-				"abctl%d", i);
-	if (IS_ERR(device)) {
-		printk(KERN_ERR "abuse_alloc: device_create failed\n");
-		goto out_free_cdev;
-	}
-
 	mutex_init(&ab->ab_ctl_mutex);
 	ab->ab_number		= i;
 	init_waitqueue_head(&ab->ab_event);
 	spin_lock_init(&ab->ab_lock);
+	INIT_LIST_HEAD(&ab->ab_reqlist);
 
 	return ab;
 
-out_free_cdev:
-	cdev_del(ab->ab_cdev);
-out_free_disk:
-	put_disk(ab->ab_disk);
 out_free_queue:
 	blk_cleanup_queue(ab->ab_queue);
 out_cleanup_tags:
 	blk_mq_free_tag_set(&ab->tag_set);
+out_free_idr:
+	idr_remove(&abuse_index_idr, i);
 out_free_dev:
 	kfree(ab);
 out:
@@ -612,10 +672,9 @@ out:
 static void abuse_free(struct abuse_device *ab)
 {
 	blk_cleanup_queue(ab->ab_queue);
-	device_destroy(abuse_class, MKDEV(ABUSECTL_MAJOR, ab->ab_number));
-	cdev_del(ab->ab_cdev);
+	del_gendisk(ab->ab_disk);
+	blk_mq_free_tag_set(&ab->tag_set);
 	put_disk(ab->ab_disk);
-	list_del(&ab->ab_list);
 	kfree(ab);
 }
 
@@ -623,22 +682,18 @@ static struct abuse_device *abuse_init_one(int i)
 {
 	struct abuse_device *ab;
 
-	list_for_each_entry(ab, &abuse_devices, ab_list)
-		if (ab->ab_number == i)
-			return ab;
+	ab = idr_find(&abuse_index_idr, i);
+	if (ab)
+		return ab;
 
 	ab = abuse_alloc(i);
-	if (ab) {
+	if (ab)
 		add_disk(ab->ab_disk);
-		list_add_tail(&ab->ab_list, &abuse_devices);
-		INIT_LIST_HEAD(&ab->ab_reqlist);
-	}
 	return ab;
 }
 
 static void abuse_del_one(struct abuse_device *ab)
 {
-	del_gendisk(ab->ab_disk);
 	abuse_free(ab);
 }
 
@@ -656,11 +711,18 @@ static struct kobject *abuse_probe(dev_t dev, int *part, void *data)
 	return kobj;
 }
 
+static int abuse_exit_cb(int id, void *ptr, void *data)
+{
+	struct abuse_device *ab = ptr;
+	abuse_del_one(ab);
+	return 0;
+}
+
 static int __init abuse_init(void)
 {
 	int i, nr, err;
 	unsigned long range;
-	struct abuse_device *ab, *next;
+	struct abuse_device *ab;
 
 	/*
 	 * abuse module has a feature to instantiate underlying device
@@ -690,10 +752,14 @@ static int __init abuse_init(void)
 		range = 1UL << (MINORBITS - dev_shift);
 	}
 
+	err = misc_register(&abuse_misc);
+	if (err < 0)
+		return err;
+
 	err = -EIO;
 	if (register_blkdev(ABUSE_MAJOR, "abuse")) {
 		printk("abuse: register_blkdev failed!\n");
-		return err;
+		goto unregister_misc;
 	}
 
 	err = register_chrdev_region(MKDEV(ABUSECTL_MAJOR, 0), range, "abuse");
@@ -715,14 +781,10 @@ static int __init abuse_init(void)
 			printk(KERN_INFO "abuse: out of memory\n");
 			goto free_devices;
 		}
-		list_add_tail(&ab->ab_list, &abuse_devices);
-		INIT_LIST_HEAD(&ab->ab_reqlist);
+		add_disk(ab->ab_disk);
 	}
 
 	/* point of no return */
-
-	list_for_each_entry(ab, &abuse_devices, ab_list)
-		add_disk(ab->ab_disk);
 
 	blk_register_region(MKDEV(ABUSE_MAJOR, 0), range,
 				  THIS_MODULE, abuse_probe, NULL, NULL);
@@ -731,28 +793,30 @@ static int __init abuse_init(void)
 	return 0;
 
 free_devices:
-	list_for_each_entry_safe(ab, next, &abuse_devices, ab_list)
-		abuse_free(ab);
+	idr_for_each(&abuse_index_idr, abuse_exit_cb, NULL);
 unregister_chr:
 	unregister_chrdev_region(MKDEV(ABUSECTL_MAJOR, 0), range);
 unregister_blk:
 	unregister_blkdev(ABUSE_MAJOR, "abuse");
+unregister_misc:
+	misc_deregister(&abuse_misc);
 	return err;
 }
 
 static void __exit abuse_exit(void)
 {
 	unsigned long range;
-	struct abuse_device *ab, *next;
 
 	range = max_abuse ? max_abuse :  1UL << (MINORBITS - dev_shift);
 
-	list_for_each_entry_safe(ab, next, &abuse_devices, ab_list)
-		abuse_del_one(ab);
+	idr_for_each(&abuse_index_idr, abuse_exit_cb, NULL);
+	idr_destroy(&abuse_index_idr);
+	device_destroy(abuse_class, MKDEV(ABUSECTL_MAJOR, 0));
 	class_destroy(abuse_class);
 	blk_unregister_region(MKDEV(ABUSE_MAJOR, 0), range);
 	unregister_chrdev_region(MKDEV(ABUSECTL_MAJOR, 0), range);
 	unregister_blkdev(ABUSE_MAJOR, "abuse");
+	misc_deregister(&abuse_misc);
 }
 
 module_init(abuse_init);
