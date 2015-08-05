@@ -126,9 +126,10 @@ int main(int argc, char *argv[])
 	/*        xfr.ab_result, xfr.ab_vec_count); */
 
 	// allocate receive/send buffer
+	off_t pos = 0;
 	for (i=0; i<xfr.ab_vec_count; ++i) {
-	  //printf("\toffset = %d, len = %d\n", vecs[i].ab_offset, vecs[i].ab_len);
-	  vecs[i].ab_address = (__u64)(data + 512 * xfr.ab_sector);
+	  vecs[i].ab_address = (__u64)(data + 512 * xfr.ab_sector + pos);
+	  pos += vecs[i].ab_len;
 	}
 	if (ioctl(fd, ABUSE_PUT_REQ, &xfr) == -1) {
 	  perror("PUT_BIO failed");
