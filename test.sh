@@ -4,7 +4,7 @@ N=0
 SIZE=16
 
 DEV=/dev/abuse${N}
-CTL=/dev/abctl${N}
+CTL=/dev/abctl
 
 die() {
     err=$?
@@ -14,7 +14,7 @@ die() {
 
 set -x
 
-./userland/abctl ${CTL} &
+./userland/abmem ${DEV} &
 pid=$!
 sleep 1
 dd if=/dev/zero of=${DEV} bs=4096 count=1 oflag=sync || die
