@@ -55,20 +55,15 @@ static void abuse_del_one(struct abuse_device *ab);
 
 static void abuse_flush_req(struct abuse_device *ab)
 {
-	//struct bio *bio, *next;
+	struct ab_req *req = NULL, *tmp;
 
-	/* spin_lock_irq(&ab->ab_lock); */
-	/* bio = ab->ab_bio; */
-	/* ab->ab_biotail = ab->ab_bio = NULL; */
-	/* ab->ab_queue_size = 0; */
-	/* spin_unlock_irq(&ab->ab_lock); */
-
-	/* while (bio) { */
-	/* 	next = bio->bi_next; */
-	/* 	bio->bi_next = NULL; */
-	/* 	bio_io_error(bio); */
-	/* 	bio = next; */
-	/* } */
+	spin_lock_irq(&ab->ab_lock);
+	list_for_each_entry_safe(req, tmp, &ab->ab_reqlist, list) {
+		req->rq->cmd_flags |= REQ_FAILED;
+		blk_complete_request(req->rq);
+		list_del(&req->list);
+	}
+	spin_unlock_irq(&ab->ab_lock);
 }
 
 static inline int is_abuse_device(struct file *file)
